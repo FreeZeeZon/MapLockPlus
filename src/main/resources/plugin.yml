@@ -1,0 +1,26 @@
+name: MapLockPlus
+version: '1.0'
+main: org.FreeZeeZon.maplockplus.MapLockPlus
+api-version: '1.21'
+authors: [ FreeZeeZon ]
+description: Plugin for locking maps from being copied
+
+commands:
+  maplock:
+    description: Lock or unlock a map
+    usage: /<command> [anon|reload]
+    aliases: [ml, lockmap]
+
+permissions:
+  maplock.use:
+    description: Allows locking and unlocking maps
+    default: true
+  maplock.reload:
+    description: Allows reloading the plugin config
+    default: op
+  maplock.*:
+    description: Grants all MapLock plugin permissions
+    default: op
+    children:
+      maplock.use: true
+      maplock.reload: true
