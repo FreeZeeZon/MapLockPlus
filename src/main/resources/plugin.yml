@@ -1,5 +1,5 @@
 name: MapLockPlus
-version: '1.1'
+version: '1.2'
 main: org.FreeZeeZon.maplockplus.MapLockPlus
 api-version: '1.21'
 authors: [ FreeZeeZon ]

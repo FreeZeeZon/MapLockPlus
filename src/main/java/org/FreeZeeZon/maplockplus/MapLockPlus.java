@@ -1,23 +1,26 @@
 package org.FreeZeeZon.maplockplus;
 
 import org.bstats.bukkit.Metrics;
-import org.bstats.charts.SimplePie;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.Event;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -28,8 +31,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+@SuppressWarnings("deprecation")
 public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
 
+    // Namespace "maplock" is kept so maps locked by older versions keep working
     private static final NamespacedKey LOCKED_MAP_KEY = new NamespacedKey("maplock", "locked");
     private static final NamespacedKey OWNER_KEY = new NamespacedKey("maplock", "owner");
     private static final NamespacedKey ANONYMOUS_KEY = new NamespacedKey("maplock", "anonymous");
@@ -46,8 +51,8 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
     private String msgNoPermission;
 
     // Lore for locked maps
-    private List<String> lockedMapLore;
-    private List<String> anonymousMapLore;
+    private List<String> lockedMapLore = new ArrayList<>();
+    private List<String> anonymousMapLore = new ArrayList<>();
     private boolean showOwnerInLore;
     private String ownerFormat;
 
@@ -61,21 +66,19 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
         checkCrafterSupport();
         getServer().getPluginManager().registerEvents(this, this);
 
-        // Register TabCompleter
         if (getCommand("maplock") != null) {
+            getCommand("maplock").setExecutor(this);
             getCommand("maplock").setTabCompleter(this);
         }
 
-        getLogger().info("MapLockPlus enabled!");
-        // You can find the plugin id of your plugins on
-        // the page https://bstats.org/what-is-my-plugin-id
-        int pluginId =28376/* INSERT PLUGIN ID HERE */;
-        Metrics metrics = new Metrics(this, pluginId);
+        // bStats
+        try {
+            new Metrics(this, 28376);
+        } catch (Throwable t) {
+            getLogger().warning("Could not start bStats metrics: " + t.getMessage());
+        }
 
-        // Optional: Add custom charts
-        metrics.addCustomChart(
-                new SimplePie("chart_id", () -> "My value")
-        );
+        getLogger().info("MapLockPlus enabled!");
     }
 
     private void checkCrafterSupport() {
@@ -109,14 +112,12 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
         ownerFormat = colorize(getConfig().getString("lore.owner-format", "&7Owner: &f%owner%"));
 
         lockedMapLore = new ArrayList<>();
-        List<String> loreFromConfig = getConfig().getStringList("lore.locked-map");
-        for (String line : loreFromConfig) {
+        for (String line : getConfig().getStringList("lore.locked-map")) {
             lockedMapLore.add(colorize(line));
         }
 
         anonymousMapLore = new ArrayList<>();
-        List<String> anonymousLoreFromConfig = getConfig().getStringList("lore.anonymous-map");
-        for (String line : anonymousLoreFromConfig) {
+        for (String line : getConfig().getStringList("lore.anonymous-map")) {
             anonymousMapLore.add(colorize(line));
         }
     }
@@ -138,12 +139,10 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
             List<String> completions = new ArrayList<>();
             String input = args[0].toLowerCase();
 
-            // Add "anon" option
             if ("anon".startsWith(input) || "anonim".startsWith(input) || "anonymous".startsWith(input)) {
                 completions.add("anon");
             }
 
-            // Add "reload" option only if player has permission
             if (sender.hasPermission("maplock.reload") && "reload".startsWith(input)) {
                 completions.add("reload");
             }
@@ -151,7 +150,7 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
             return completions;
         }
 
-        // Return empty list to prevent player name suggestions
+        // Empty list prevents player name suggestions
         return Collections.emptyList();
     }
 
@@ -178,7 +177,6 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
 
         Player player = (Player) sender;
 
-        // Permission check
         if (!player.hasPermission("maplock.use")) {
             player.sendMessage(msgNoPermission);
             return true;
@@ -186,24 +184,23 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
 
         ItemStack itemInHand = player.getInventory().getItemInMainHand();
 
-        if (itemInHand.getType() != Material.FILLED_MAP) {
+        if (itemInHand == null || itemInHand.getType() != Material.FILLED_MAP) {
             player.sendMessage(msgMustHoldMap);
             return true;
         }
 
-        // Check for anonymous lock
-        boolean anonymous = false;
-        if (args.length > 0 && (args[0].equalsIgnoreCase("anonim") ||
-                args[0].equalsIgnoreCase("anonymous") ||
-                args[0].equalsIgnoreCase("anon"))) {
-            anonymous = true;
-        }
+        boolean anonymous = args.length > 0 && (args[0].equalsIgnoreCase("anonim")
+                || args[0].equalsIgnoreCase("anonymous")
+                || args[0].equalsIgnoreCase("anon"));
 
+        // Work on the WHOLE stack (keeps the original amount)
         ItemStack modifiedItem = itemInHand.clone();
-        modifiedItem.setAmount(1);
 
         ItemMeta meta = modifiedItem.getItemMeta();
-        if (meta == null) return true;
+        if (meta == null) {
+            player.sendMessage(msgMustHoldMap);
+            return true;
+        }
 
         PersistentDataContainer container = meta.getPersistentDataContainer();
         String playerUUID = player.getUniqueId().toString();
@@ -237,24 +234,17 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
                 lore = new ArrayList<>(lockedMapLore);
 
                 if (showOwnerInLore) {
-                    String ownerLine = ownerFormat.replace("%owner%", player.getName());
-                    lore.add(ownerLine);
+                    lore.add(ownerFormat.replace("%owner%", player.getName()));
                 }
             }
 
-            meta.setLore(lore);
+            meta.setLore(lore.isEmpty() ? null : lore);
             player.sendMessage(msgLocked);
             player.sendMessage(msgOnlyYouUnlock);
         }
 
         modifiedItem.setItemMeta(meta);
-
-        if (itemInHand.getAmount() > 1) {
-            itemInHand.setAmount(itemInHand.getAmount() - 1);
-            player.getInventory().addItem(modifiedItem);
-        } else {
-            player.getInventory().setItemInMainHand(modifiedItem);
-        }
+        player.getInventory().setItemInMainHand(modifiedItem);
         return true;
     }
 
@@ -262,7 +252,8 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareCraft(PrepareItemCraftEvent event) {
-        for (ItemStack item : event.getInventory().getMatrix()) {
+        ItemStack[] matrix = event.getInventory().getMatrix();
+        for (ItemStack item : matrix) {
             if (isMapLocked(item)) {
                 event.getInventory().setResult(new ItemStack(Material.AIR));
                 return;
@@ -276,90 +267,95 @@ public class MapLockPlus extends JavaPlugin implements Listener, TabCompleter {
             if (isMapLocked(item)) {
                 event.setCancelled(true);
                 event.setResult(Event.Result.DENY);
-                if (event.getWhoClicked() instanceof Player) {
-                    event.getWhoClicked().sendMessage(msgCannotCopy);
-                }
+                notifyCannotCopy(event.getWhoClicked());
                 return;
-            }
-        }
-
-        ItemStack result = event.getRecipe().getResult();
-        if (result != null && result.getType() == Material.FILLED_MAP) {
-            for (ItemStack item : event.getInventory().getMatrix()) {
-                if (item != null && item.getType() == Material.FILLED_MAP) {
-                    if (isMapLocked(item)) {
-                        event.setCancelled(true);
-                        event.setResult(Event.Result.DENY);
-                        if (event.getWhoClicked() instanceof Player) {
-                            event.getWhoClicked().sendMessage(msgCannotCopy);
-                        }
-                        return;
-                    }
-                }
             }
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryMoveItem(InventoryMoveItemEvent event) {
         if (!crafterSupported) return;
 
-        if (isCrafterInventory(event.getDestination().getType())) {
-            if (isMapLocked(event.getItem())) {
-                event.setCancelled(true);
-            }
+        if (isCrafterInventory(event.getDestination().getType()) && isMapLocked(event.getItem())) {
+            event.setCancelled(true);
         }
     }
 
     private boolean isCrafterInventory(InventoryType type) {
-        if (!crafterSupported) return false;
-        return type.name().equals("CRAFTER");
+        return crafterSupported && type != null && type.name().equals("CRAFTER");
+    }
+
+    private boolean isProtectedInventory(InventoryType type) {
+        return type == InventoryType.CARTOGRAPHY || isCrafterInventory(type);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryClick(InventoryClickEvent event) {
-        if (event.getClickedInventory() == null) return;
+        Inventory clicked = event.getClickedInventory();
+        if (clicked == null) return;
 
-        InventoryType type = event.getView().getType();
+        if (!isProtectedInventory(event.getView().getType())) return;
 
-        boolean isProtectedInventory = type == InventoryType.CARTOGRAPHY ||
-                isCrafterInventory(type);
+        boolean topClicked = clicked.getType() != InventoryType.PLAYER;
+        HumanEntity who = event.getWhoClicked();
 
-        if (!isProtectedInventory) {
+        // Shift-click of a locked map (from player inventory into the table)
+        if (event.isShiftClick() && isMapLocked(event.getCurrentItem())) {
+            denyClick(event);
             return;
         }
 
-        if (event.isShiftClick() && event.getCurrentItem() != null) {
-            if (isMapLocked(event.getCurrentItem())) {
+        if (topClicked) {
+            // Locked map on the cursor or already in the slot
+            if (isMapLocked(event.getCursor()) || isMapLocked(event.getCurrentItem())) {
+                denyClick(event);
+                return;
+            }
+
+            // Number keys (1-9) swap with hotbar item
+            if (event.getClick() == ClickType.NUMBER_KEY) {
+                int button = event.getHotbarButton();
+                if (button >= 0 && isMapLocked(who.getInventory().getItem(button))) {
+                    denyClick(event);
+                    return;
+                }
+            }
+
+            // F key swap with off-hand
+            if (event.getClick() == ClickType.SWAP_OFFHAND
+                    && isMapLocked(who.getInventory().getItemInOffHand())) {
+                denyClick(event);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onInventoryDrag(InventoryDragEvent event) {
+        if (!isProtectedInventory(event.getView().getType())) return;
+
+        if (!isMapLocked(event.getOldCursor())) return;
+
+        int topSize = event.getView().getTopInventory().getSize();
+        for (int rawSlot : event.getRawSlots()) {
+            if (rawSlot < topSize) {
                 event.setCancelled(true);
                 event.setResult(Event.Result.DENY);
-                if (event.getWhoClicked() instanceof Player) {
-                    event.getWhoClicked().sendMessage(msgCannotCopy);
-                }
+                notifyCannotCopy(event.getWhoClicked());
                 return;
             }
         }
+    }
 
-        if (event.getCursor() != null && isMapLocked(event.getCursor())) {
-            if (event.getClickedInventory().getType() != InventoryType.PLAYER) {
-                event.setCancelled(true);
-                event.setResult(Event.Result.DENY);
-                if (event.getWhoClicked() instanceof Player) {
-                    event.getWhoClicked().sendMessage(msgCannotCopy);
-                }
-                return;
-            }
-        }
+    private void denyClick(InventoryClickEvent event) {
+        event.setCancelled(true);
+        event.setResult(Event.Result.DENY);
+        notifyCannotCopy(event.getWhoClicked());
+    }
 
-        if (event.getClickedInventory().getType() != InventoryType.PLAYER) {
-            if (event.getCurrentItem() != null && isMapLocked(event.getCurrentItem())) {
-                event.setCancelled(true);
-                event.setResult(Event.Result.DENY);
-                if (event.getWhoClicked() instanceof Player) {
-                    event.getWhoClicked().sendMessage(msgCannotCopy);
-                }
-                return;
-            }
+    private void notifyCannotCopy(HumanEntity who) {
+        if (who instanceof Player) {
+            who.sendMessage(msgCannotCopy);
         }
     }
 
